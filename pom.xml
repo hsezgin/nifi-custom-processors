@@ -5,7 +5,7 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>org.sezgin</groupId>
-    <artifactId>insecure-invoke-http</artifactId>
+    <artifactId>nifi-custom-processors</artifactId>
     <version>1.1</version>
     <packaging>nar</packaging>
 
@@ -36,6 +36,8 @@
             <version>${nifi.version}</version>
             <scope>provided</scope>
         </dependency>
+
+        <!-- HTTP dependencies -->
         <dependency>
             <groupId>org.apache.httpcomponents</groupId>
             <artifactId>httpclient</artifactId>
@@ -46,7 +48,8 @@
             <artifactId>httpcore</artifactId>
             <version>4.4.16</version>
         </dependency>
-        <!-- Jackson JSON dependencies for pagination support -->
+
+        <!-- Jackson JSON dependencies -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
@@ -57,18 +60,35 @@
             <artifactId>jackson-core</artifactId>
             <version>${jackson.version}</version>
         </dependency>
+
+        <!-- LDAP dependencies -->
+        <!-- Standard Java JNDI LDAP API is included in JDK -->
+
+        <!-- Testing dependencies -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>5.10.1</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-core</artifactId>
+            <version>5.8.0</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
         <plugins>
-            <!-- Maven Resources Plugin sürümünü açıkça belirtelim -->
+            <!-- Maven Resources Plugin -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-resources-plugin</artifactId>
                 <version>3.3.1</version>
             </plugin>
 
-            <!-- Compiler Plugin sürümünü açıkça belirtelim -->
+            <!-- Compiler Plugin -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
