@@ -1,7 +1,5 @@
 package org.sezgin.processors;
 
-import com.github.benmanes.caffeine.cache.AsyncCache;
-import org.apache.http.HttpEntity;
 import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.*;
 import org.apache.http.config.Registry;
@@ -41,6 +39,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.cert.X509Certificate;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 // Add JSON parsing libraries
@@ -55,23 +54,18 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 @CapabilityDescription("Custom implementation of HTTP client that allows bypassing SSL validation for improved performance with support for pagination")
 public class InsecureInvokeHTTP extends AbstractProcessor {
 
-    // Static block for SSL setup (unchanged)
+    // Static block for SSL setup
     static {
         try {
             // Disable SSL validation at the JVM level
-            HttpsURLConnection.setDefaultHostnameVerifier(
-                    (hostname, sslSession) -> true);
+            HttpsURLConnection.setDefaultHostnameVerifier((hostname, sslSession) -> true);
 
             SSLContext sc = SSLContext.getInstance("TLS");
             sc.init(null, new TrustManager[]{
                     new X509TrustManager() {
-                        public X509Certificate[] getAcceptedIssuers() {
-                            return null;
-                        }
-                        public void checkClientTrusted(X509Certificate[] certs, String authType) {
-                        }
-                        public void checkServerTrusted(X509Certificate[] certs, String authType) {
-                        }
+                        public X509Certificate[] getAcceptedIssuers() { return null; }
+                        public void checkClientTrusted(X509Certificate[] certs, String authType) { }
+                        public void checkServerTrusted(X509Certificate[] certs, String authType) { }
                     }
             }, new java.security.SecureRandom());
 
@@ -93,7 +87,7 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
         }
     }
 
-    // Property Descriptors (existing ones)
+    // Property Descriptors
     public static final PropertyDescriptor URL = new PropertyDescriptor.Builder()
             .name("URL")
             .description("The URL to connect to. If not specified, the processor will try to use the http.url attribute from the FlowFile.")
@@ -119,29 +113,29 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
             .defaultValue("false")
             .build();
 
-    // Pagination properties - NOT REQUIRED and USE EXPRESSION LANGUAGE
+    // Pagination properties
     public static final PropertyDescriptor ENABLE_PAGINATION = new PropertyDescriptor.Builder()
             .name("Enable Pagination")
             .description("Whether to automatically handle pagination in responses. Can also be set via FlowFile attribute 'http.pagination.enabled'")
-            .required(false) // Not required
+            .required(false)
             .allowableValues("true", "false")
             .defaultValue("false")
-            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES) // Support Expression Language
+            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
             .build();
 
     public static final PropertyDescriptor PAGINATION_MODE = new PropertyDescriptor.Builder()
             .name("Pagination Mode")
             .description("Type of pagination to handle. Can also be set via FlowFile attribute 'http.pagination.mode'")
-            .required(false) // Not required
+            .required(false)
             .allowableValues("OData (@odata.nextLink)", "Custom")
-            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES) // Support Expression Language
+            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
             .build();
 
     public static final PropertyDescriptor CUSTOM_NEXT_LINK_JSONPATH = new PropertyDescriptor.Builder()
             .name("Custom Next Link JSONPath")
             .description("JSONPath expression to extract the next link URL from the response. Example: '$.nextPage' or '$.pagination.next'. Can also be set via FlowFile attribute 'http.pagination.jsonpath'")
             .required(false)
-            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES) // Support Expression Language
+            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
             .build();
 
     public static final PropertyDescriptor MAX_PAGES = new PropertyDescriptor.Builder()
@@ -150,7 +144,7 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
             .required(false)
             .defaultValue("10")
             .addValidator(StandardValidators.NON_NEGATIVE_INTEGER_VALIDATOR)
-            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES) // Support Expression Language
+            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
             .build();
 
     public static final PropertyDescriptor COMBINE_RESULTS = new PropertyDescriptor.Builder()
@@ -159,10 +153,9 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
             .required(false)
             .allowableValues("true", "false")
             .defaultValue("false")
-            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES) // Support Expression Language
+            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
             .build();
 
-    // Added this property with a more appropriate name
     public static final PropertyDescriptor PAGINATION_JSON_PATH = new PropertyDescriptor.Builder()
             .name("Pagination JSON Path")
             .description("When combining results, specifies the JSONPath to the array field in the response that contains the data items to be combined (e.g., 'value' for OData, 'items' for other APIs). Can also be set via FlowFile attribute 'http.pagination.data.path'")
@@ -170,7 +163,7 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
             .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
             .build();
 
-    // Existing properties (unchanged)
+    // Existing properties
     public static final PropertyDescriptor BYPASS_SSL_VALIDATION = new PropertyDescriptor.Builder()
             .name("Bypass SSL Validation")
             .description("Whether to bypass SSL certificate validation")
@@ -303,7 +296,7 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
         descriptors.add(CUSTOM_NEXT_LINK_JSONPATH);
         descriptors.add(MAX_PAGES);
         descriptors.add(COMBINE_RESULTS);
-        descriptors.add(PAGINATION_JSON_PATH); // Add the new property
+        descriptors.add(PAGINATION_JSON_PATH);
         // Existing properties
         descriptors.add(BYPASS_SSL_VALIDATION);
         descriptors.add(CONNECTION_TIMEOUT);
@@ -333,6 +326,30 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
     @Override
     public final List<PropertyDescriptor> getSupportedPropertyDescriptors() {
         return descriptors;
+    }
+
+    @Override
+    protected PropertyDescriptor getSupportedDynamicPropertyDescriptor(final String propertyDescriptorName) {
+        // HTTP header support
+        if (propertyDescriptorName.startsWith("http.header.")) {
+            boolean isSensitiveHeader = propertyDescriptorName.equalsIgnoreCase("http.header.Authorization") ||
+                    propertyDescriptorName.equalsIgnoreCase("http.header.X-API-Key") ||
+                    propertyDescriptorName.equalsIgnoreCase("http.header.api-key");
+
+            return new PropertyDescriptor.Builder()
+                    .name(propertyDescriptorName)
+                    .displayName(propertyDescriptorName.substring("http.header.".length()) + " Header")
+                    .description("HTTP Header: Sets the '" + propertyDescriptorName.substring("http.header.".length()) +
+                            "' HTTP header value for the request")
+                    .required(false)
+                    .dynamic(true)
+                    .sensitive(isSensitiveHeader) // Mark sensitive headers
+                    .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+                    .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
+                    .build();
+        }
+
+        return null; // Return null for other dynamic properties
     }
 
     /**
@@ -406,7 +423,6 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
      */
     private void createHttpClient(final ProcessContext context) {
         try {
-            final boolean bypassSSL = context.getProperty(BYPASS_SSL_VALIDATION).asBoolean();
             final int connectionTimeout = context.getProperty(CONNECTION_TIMEOUT).asInteger();
             final int maxPoolSize = context.getProperty(MAX_POOL_SIZE).asInteger();
             final boolean followRedirects = context.getProperty(FOLLOW_REDIRECTS).asBoolean();
@@ -414,8 +430,7 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
             // Close existing HTTP client
             closeHttpClient();
 
-            // Create a completely insecure HTTP client regardless of the bypassSSL flag
-            // This ensures all SSL validation is disabled
+            // Create an insecure HTTP client with SSL validation disabled
             CloseableHttpClient httpClient = createInsecureHttpClient(
                     connectionTimeout, maxPoolSize, followRedirects);
 
@@ -448,7 +463,7 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
      * Create appropriate HttpRequestBase object based on HTTP Method
      */
     private HttpRequestBase createHttpRequest(String method, String url) {
-        // Add extra validation for debug mode
+        // Add validation for method and URL
         if (method == null || method.trim().isEmpty()) {
             throw new IllegalArgumentException("HTTP method cannot be null or empty");
         }
@@ -463,7 +478,6 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
         }
 
         // Create appropriate request object based on HTTP method
-        // Using switch expressions for Java 21
         return switch (method.toUpperCase()) {
             case "GET" -> new HttpGet(url);
             case "POST" -> new HttpPost(url);
@@ -477,30 +491,112 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
     }
 
     /**
-     * Add all headers from FlowFile to the request
+     * Process dynamic properties from ProcessContext and add them as headers to the request
+     * @param request The HTTP request to add headers to
+     * @param context The ProcessContext containing properties
+     * @param flowFile The FlowFile for expression evaluation
+     * @param debugMode Whether to log debug information
+     * @return Number of headers added
      */
-    private void addHeadersToRequest(HttpRequestBase request, FlowFile flowFile, boolean addHeaders) {
-        if (!addHeaders) {
-            return;
+    private int processDynamicPropertiesAsHeaders(HttpRequestBase request, ProcessContext context,
+                                                  FlowFile flowFile, boolean debugMode) {
+
+        int headerCount = 0;
+        StringBuilder debugHeaders = new StringBuilder();
+
+        // Iterate through all properties to find dynamic ones
+        for (Map.Entry<PropertyDescriptor, String> entry : context.getProperties().entrySet()) {
+            PropertyDescriptor property = entry.getKey();
+
+            if (property.isDynamic()) {
+                String propertyName = property.getName();
+
+                // Check if it's a header property
+                if (propertyName.startsWith("http.header.")) {
+                    String headerName = propertyName.substring("http.header.".length());
+
+                    // Get the evaluated value using expression language
+                    String headerValue = context.getProperty(property)
+                            .evaluateAttributeExpressions(flowFile).getValue();
+
+                    if (headerValue != null && !headerValue.isEmpty()) {
+                        // Add header to request
+                        request.addHeader(headerName, headerValue);
+                        headerCount++;
+
+                        // Log for debugging
+                        if (debugMode) {
+                            boolean isSensitive = property.isSensitive();
+                            String logValue = isSensitive ? "********" : headerValue;
+                            debugHeaders.append("  ").append(headerName).append(": ").append(logValue).append("\n");
+                            getLogger().info("Added dynamic header: {} = {}", headerName, logValue);
+                        }
+                    }
+                }
+            }
         }
 
-        flowFile.getAttributes().entrySet().stream()
-                .filter(entry -> entry.getKey().startsWith("http.header."))
-                .forEach(entry -> {
-                    String headerName = entry.getKey().substring(12); // "http.header.".length() = 12
-                    String headerValue = entry.getValue();
+        if (debugMode && headerCount > 0) {
+            getLogger().info("Added {} headers from dynamic properties:\n{}", headerCount, debugHeaders.toString());
+        }
 
-                    // Skip common HTTP headers that should be managed by the client
-                    if (!headerName.equalsIgnoreCase("content-length") &&
-                            !headerName.equalsIgnoreCase("transfer-encoding") &&
-                            !headerName.equalsIgnoreCase("host")) {
-                        request.addHeader(headerName, headerValue);
-                    }
-                });
+        return headerCount;
     }
 
     /**
-     * Log all FlowFile attributes for debugging purposes
+     * Add FlowFile attributes as headers to the request
+     */
+    private void addHeadersToRequest(HttpRequestBase request, FlowFile flowFile, boolean addHeaders, boolean debugMode) {
+        if (!addHeaders) {
+            if (debugMode) {
+                getLogger().info("Add Headers to Request is set to false - not adding any headers from FlowFile attributes");
+            }
+            return;
+        }
+
+        final AtomicInteger headerCount = new AtomicInteger(0);
+        final StringBuilder debugHeaders = new StringBuilder();
+
+        // Filter and add FlowFile attributes as headers
+        flowFile.getAttributes().entrySet().stream()
+                .filter(entry -> entry.getKey().startsWith("http.header."))
+                .forEach(entry -> {
+                    String headerName = entry.getKey().substring("http.header.".length());
+                    String headerValue = entry.getValue();
+
+                    // Skip headers that should be managed by the client
+                    if (!headerName.equalsIgnoreCase("content-length") &&
+                            !headerName.equalsIgnoreCase("transfer-encoding") &&
+                            !headerName.equalsIgnoreCase("host")) {
+
+                        request.addHeader(headerName, headerValue);
+                        headerCount.incrementAndGet();
+
+                        // Add to debug log
+                        if (debugMode) {
+                            boolean isSensitiveHeader = headerName.equalsIgnoreCase("Authorization") ||
+                                    headerName.equalsIgnoreCase("X-API-Key") ||
+                                    headerName.equalsIgnoreCase("api-key");
+
+                            String logValue = isSensitiveHeader ? "********" : headerValue;
+                            debugHeaders.append("  ").append(headerName).append(": ").append(logValue).append("\n");
+                        }
+                    }
+                });
+
+        // Log debug info
+        if (debugMode) {
+            if (headerCount.get() > 0) {
+                getLogger().info("Added {} HTTP headers from FlowFile attributes:\n{}",
+                        headerCount.get(), debugHeaders.toString());
+            } else {
+                getLogger().info("No HTTP headers found in FlowFile attributes");
+            }
+        }
+    }
+
+    /**
+     * Log all FlowFile attributes for debugging
      */
     private void logFlowFileAttributes(FlowFile flowFile, boolean debugMode) {
         if (!debugMode) return;
@@ -510,7 +606,15 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
         sb.append("FlowFile Attributes:\n");
 
         attributes.forEach((key, value) -> {
-            sb.append("  ").append(key).append(" = ").append(value).append("\n");
+            // Mask sensitive values
+            boolean isSensitive = key.equals("http.header.Authorization") ||
+                    key.equals("http.header.X-API-Key") ||
+                    key.contains("password") ||
+                    key.contains("secret") ||
+                    key.contains("token");
+
+            String logValue = isSensitive ? "********" : value;
+            sb.append("  ").append(key).append(" = ").append(logValue).append("\n");
         });
 
         getLogger().info(sb.toString());
@@ -518,13 +622,6 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
 
     /**
      * Extract next link URL from the response based on pagination mode
-     * Optimized to minimize JSON parsing when possible
-     *
-     * @param responseBody JSON response body as string
-     * @param paginationMode The pagination mode (OData or Custom)
-     * @param customJsonPath Custom JSONPath for next link (for Custom mode)
-     * @param debugMode Whether debug mode is enabled
-     * @return Next link URL or null if no next link found
      */
     private String extractNextLink(String responseBody, String paginationMode, String customJsonPath, boolean debugMode) {
         // Quick check if response is empty or null to avoid parsing
@@ -535,17 +632,17 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
         try {
             // For OData pagination, try simple string search first for performance
             if ("OData (@odata.nextLink)".equals(paginationMode)) {
-                // Simple string search for OData nextLink - much faster than parsing the entire JSON
+                // String search for OData nextLink - faster than parsing the entire JSON
                 int nextLinkIndex = responseBody.indexOf("\"@odata.nextLink\"");
                 if (nextLinkIndex >= 0) {
-                    // Found the nextLink field, now extract the URL
-                    int valueStart = responseBody.indexOf('"', nextLinkIndex + 18) + 1; // Skip past the field name and colon to the value
+                    // Found the nextLink field, extract the URL
+                    int valueStart = responseBody.indexOf('"', nextLinkIndex + 18) + 1; // Skip field name and colon
                     if (valueStart > 0) {
                         int valueEnd = responseBody.indexOf('"', valueStart);
                         if (valueEnd > valueStart) {
                             String nextLink = responseBody.substring(valueStart, valueEnd);
                             if (debugMode) {
-                                getLogger().info("Found OData next link using string search: {}", new Object[]{nextLink});
+                                getLogger().info("Found OData next link using string search: {}", nextLink);
                             }
                             return nextLink;
                         }
@@ -557,20 +654,18 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                 if (rootNode.has("@odata.nextLink")) {
                     String nextLink = rootNode.get("@odata.nextLink").asText();
                     if (debugMode) {
-                        getLogger().info("Found OData next link using JSON parsing: {}", new Object[]{nextLink});
+                        getLogger().info("Found OData next link using JSON parsing: {}", nextLink);
                     }
                     return nextLink;
                 }
             } else if ("Custom".equals(paginationMode) && customJsonPath != null && !customJsonPath.isEmpty()) {
                 // Custom pagination - use the provided JSONPath
-                // Simplified JSONPath support for better performance
 
-                // Simple JSONPath support for root level properties with string search
+                // For simple paths, try string search first
                 if (customJsonPath.startsWith("$.")) {
                     String path = customJsonPath.substring(2); // Remove the $. prefix
                     String[] parts = path.split("\\.");
 
-                    // For simple single-level paths, try string search first
                     if (parts.length == 1) {
                         String fieldName = "\"" + parts[0] + "\"";
                         int fieldIndex = responseBody.indexOf(fieldName);
@@ -581,7 +676,7 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                                 if (valueEnd > valueStart) {
                                     String nextLink = responseBody.substring(valueStart, valueEnd);
                                     if (debugMode) {
-                                        getLogger().info("Found custom next link using string search: {}", new Object[]{nextLink});
+                                        getLogger().info("Found custom next link using string search: {}", nextLink);
                                     }
                                     return nextLink;
                                 }
@@ -603,30 +698,25 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                     if (currentNode != null && !currentNode.isNull()) {
                         String nextLink = currentNode.asText();
                         if (debugMode) {
-                            getLogger().info("Found custom next link using JSON path: {}", new Object[]{nextLink});
+                            getLogger().info("Found custom next link using JSON path: {}", nextLink);
                         }
                         return nextLink;
                     }
                 }
             }
         } catch (Exception e) {
-            getLogger().warn("Failed to extract next link from response: {}", new Object[]{e.getMessage()});
+            getLogger().warn("Failed to extract next link from response: {}", e.getMessage());
             if (debugMode) {
                 getLogger().warn("Exception details:", e);
             }
         }
 
-        // No next link found or error
+        // No next link found or error occurred
         return null;
     }
 
     /**
      * Combine paginated results into a single response with JSON data arrays combined
-     *
-     * @param allResponses List of JSON response strings from all pages
-     * @param paginationJsonPath JSONPath to the data array field in responses
-     * @param debugMode Whether debug mode is enabled
-     * @return Combined JSON response as string, or null if combination failed
      */
     private String combineJsonResults(List<String> allResponses, String paginationJsonPath, boolean debugMode) {
         try {
@@ -650,7 +740,7 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
             // Parse the first response to get the structure
             JsonNode firstResponse = objectMapper.readTree(allResponses.get(0));
 
-            // Handle simple path without the $. prefix
+            // Handle path without the $. prefix
             if (!paginationJsonPath.startsWith("$.")) {
                 paginationJsonPath = "$." + paginationJsonPath;
             }
@@ -673,7 +763,7 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
             // If data field was not found or is not an array, cannot combine
             if (dataNode == null || !dataNode.isArray()) {
                 if (debugMode) {
-                    getLogger().warn("Data field '{}' not found or is not an array in response", new Object[]{paginationJsonPath});
+                    getLogger().warn("Data field '{}' not found or is not an array in response", paginationJsonPath);
                 }
                 return null;
             }
@@ -685,7 +775,7 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
             ArrayNode combinedDataArray = objectMapper.createArrayNode();
 
             // Add all items from first page's data array
-            dataNode.forEach(item -> combinedDataArray.add(item));
+            dataNode.forEach(combinedDataArray::add);
 
             // Process all subsequent pages and add their data items
             for (int i = 1; i < allResponses.size(); i++) {
@@ -705,15 +795,15 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
 
                     // If data array found, add all its items
                     if (pageDataNode != null && pageDataNode.isArray()) {
-                        pageDataNode.forEach(item -> combinedDataArray.add(item));
+                        pageDataNode.forEach(combinedDataArray::add);
 
                         if (debugMode) {
                             getLogger().debug("Added {} items from page {}",
-                                    new Object[]{pageDataNode.size(), i + 1});
+                                    pageDataNode.size(), i + 1);
                         }
                     }
                 } catch (Exception e) {
-                    getLogger().warn("Failed to process page {}: {}", new Object[]{i + 1, e.getMessage()});
+                    getLogger().warn("Failed to process page {}: {}", i + 1, e.getMessage());
                     if (debugMode) {
                         getLogger().warn("Exception details:", e);
                     }
@@ -721,7 +811,6 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
             }
 
             // Set the combined data array back to the response
-            // Need to navigate to the parent and set the field
             if (parts.length == 1) {
                 // Simple case - field is at root level
                 combinedResponse.set(parts[0], combinedDataArray);
@@ -733,8 +822,7 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                     if (nextNode == null || !nextNode.isObject()) {
                         // Can't navigate further
                         if (debugMode) {
-                            getLogger().warn("Cannot navigate to parent of data field '{}' in response",
-                                    new Object[]{paginationJsonPath});
+                            getLogger().warn("Cannot navigate to parent of data field '{}'", paginationJsonPath);
                         }
                         return null;
                     }
@@ -746,14 +834,14 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
 
             if (debugMode) {
                 getLogger().info("Combined {} pages with {} total items in '{}' field",
-                        new Object[]{allResponses.size(), combinedDataArray.size(), paginationJsonPath});
+                        allResponses.size(), combinedDataArray.size(), paginationJsonPath);
             }
 
             // Convert the combined response to string
             return objectMapper.writeValueAsString(combinedResponse);
 
         } catch (Exception e) {
-            getLogger().error("Failed to combine paginated results: {}", new Object[]{e.getMessage()});
+            getLogger().error("Failed to combine paginated results: {}", e.getMessage());
             if (debugMode) {
                 getLogger().error("Exception details:", e);
             }
@@ -762,13 +850,12 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
     }
 
     /**
-     * Get pagination settings from FlowFile attributes if available, otherwise from processor properties
+     * Get pagination settings from FlowFile attributes or processor properties
      */
     private Map<String, Object> getPaginationSettings(ProcessContext context, FlowFile flowFile, boolean debugMode) {
-        // Yeni bir Map oluştur - ilk yapılması gereken bu
         Map<String, Object> settings = new HashMap<>();
 
-        // Enable Pagination ayarını kontrol et
+        // Enable Pagination setting
         String enablePaginationStr = flowFile.getAttribute("http.pagination.enabled");
         if (enablePaginationStr == null) {
             PropertyValue propertyValue = context.getProperty(ENABLE_PAGINATION);
@@ -777,12 +864,12 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
             }
         }
 
-        // Varsayılan olarak pagination devre dışı
+        // Default is pagination disabled
         boolean enablePagination = "true".equalsIgnoreCase(enablePaginationStr);
         settings.put("enablePagination", enablePagination);
 
-        // Pagination Mode (varsayılan "OData (@odata.nextLink)")
-        String paginationMode = "OData (@odata.nextLink)"; // Varsayılan değer
+        // Pagination Mode (default "OData (@odata.nextLink)")
+        String paginationMode = "OData (@odata.nextLink)";
         if (enablePagination) {
             String modeFromAttribute = flowFile.getAttribute("http.pagination.mode");
             if (modeFromAttribute == null) {
@@ -798,7 +885,7 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
         }
         settings.put("paginationMode", paginationMode);
 
-        // Custom JSONPath (varsayılan boş string)
+        // Custom JSONPath (default empty string)
         String customJsonPath = "";
         if (enablePagination) {
             String jsonPathFromAttribute = flowFile.getAttribute("http.pagination.jsonpath");
@@ -815,8 +902,8 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
         }
         settings.put("customJsonPath", customJsonPath);
 
-        // Pagination JSON Path (varsayılan "value" OData için)
-        String paginationJsonPath = "value"; // OData için varsayılan değer
+        // Pagination JSON Path (default "value" for OData)
+        String paginationJsonPath = "value"; // Default for OData
         if (enablePagination) {
             String jsonPathFromAttribute = flowFile.getAttribute("http.pagination.data.path");
             if (jsonPathFromAttribute == null) {
@@ -829,14 +916,14 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                     !jsonPathFromAttribute.equals("no value set")) {
                 paginationJsonPath = jsonPathFromAttribute;
             } else if (!"OData (@odata.nextLink)".equals(paginationMode)) {
-                // OData değilse ve özel bir değer belirtilmemişse, boş string kullan
+                // If not OData and no custom value, use empty string
                 paginationJsonPath = "";
             }
         }
         settings.put("paginationJsonPath", paginationJsonPath);
 
-        // Max Pages (varsayılan 10)
-        int maxPages = 10; // Varsayılan değer
+        // Max Pages (default 10)
+        int maxPages = 10;
         if (enablePagination) {
             String maxPagesStr = flowFile.getAttribute("http.pagination.max.pages");
             if (maxPagesStr == null) {
@@ -851,14 +938,14 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                 }
             } catch (NumberFormatException e) {
                 if (debugMode) {
-                    getLogger().warn("Invalid max pages value: {}, using default (10)", new Object[]{maxPagesStr});
+                    getLogger().warn("Invalid max pages value: {}, using default (10)", maxPagesStr);
                 }
             }
         }
         settings.put("maxPages", maxPages);
 
-        // Combine Results (varsayılan false)
-        boolean combineResults = false; // Varsayılan değer
+        // Combine Results (default false)
+        boolean combineResults = false;
         if (enablePagination) {
             String combineResultsStr = flowFile.getAttribute("http.pagination.combine");
             if (combineResultsStr == null) {
@@ -873,13 +960,9 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
         }
         settings.put("combineResults", combineResults);
 
-        if (debugMode) {
-            if (enablePagination) {
-                getLogger().info("Using pagination settings: enabled={}, mode={}, jsonPath={}, maxPages={}, combine={}",
-                        new Object[]{enablePagination, paginationMode, paginationJsonPath, maxPages, combineResults});
-            } else {
-                getLogger().info("Pagination is disabled");
-            }
+        if (debugMode && enablePagination) {
+            getLogger().info("Using pagination settings: enabled={}, mode={}, jsonPath={}, maxPages={}, combine={}",
+                    enablePagination, paginationMode, paginationJsonPath, maxPages, combineResults);
         }
 
         return settings;
@@ -916,14 +999,12 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
 
             if (httpClient == null) {
                 getLogger().error("Failed to initialize HTTP client");
-                if (flowFile != null) {
-                    session.transfer(flowFile, REL_FAILURE);
-                }
+                session.transfer(flowFile, REL_FAILURE);
                 return;
             }
         }
 
-        // Get pagination settings from FlowFile attributes or processor properties
+        // Get pagination settings
         Map<String, Object> paginationSettings = getPaginationSettings(context, flowFile, debugMode);
         final boolean enablePagination = (boolean) paginationSettings.get("enablePagination");
         final String paginationMode = (String) paginationSettings.get("paginationMode");
@@ -932,32 +1013,27 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
         final int maxPages = (int) paginationSettings.get("maxPages");
         final boolean combineResults = (boolean) paginationSettings.get("combineResults");
 
-        // Get URL and HTTP method and all other properties with FlowFile attribute expression evaluation
+        // Get request properties
         String url;
         String method;
         String contentType;
         boolean addHeaders;
-        String extractTokenHeader;
-        String tokenAttributeName;
         String successCodesValue;
 
         try {
-            // First try to get URL from context property (if specified)
+            // Try to get URL from property or attribute
             String propertyUrl = context.getProperty(URL).evaluateAttributeExpressions(flowFile).getValue();
-
-            // If URL property is not specified or empty, try to get URL from FlowFile attribute
             String attributeUrl = flowFile.getAttribute("http.url");
 
-            // Determine which URL to use
             if (propertyUrl != null && !propertyUrl.trim().isEmpty()) {
                 url = propertyUrl.trim();
                 if (debugMode) {
-                    getLogger().info("Using URL from processor property: {}", new Object[]{url});
+                    getLogger().info("Using URL from processor property: {}", url);
                 }
             } else if (attributeUrl != null && !attributeUrl.trim().isEmpty()) {
                 url = attributeUrl.trim();
                 if (debugMode) {
-                    getLogger().info("Using URL from FlowFile attribute: {}", new Object[]{url});
+                    getLogger().info("Using URL from FlowFile attribute: {}", url);
                 }
             } else {
                 getLogger().error("No URL provided. URL property is not set and FlowFile does not contain 'http.url' attribute");
@@ -965,9 +1041,9 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                 return;
             }
 
-            // Validate URL format (basic check)
+            // Validate URL format
             if (!url.toLowerCase().startsWith("http://") && !url.toLowerCase().startsWith("https://")) {
-                getLogger().error("URL must start with http:// or https:// but was: {}", new Object[]{url});
+                getLogger().error("URL must start with http:// or https://: {}", url);
                 session.transfer(flowFile, REL_FAILURE);
                 return;
             }
@@ -993,16 +1069,14 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
             String addHeadersStr = context.getProperty(ADD_HEADERS).evaluateAttributeExpressions(flowFile).getValue();
             addHeaders = "true".equalsIgnoreCase(addHeadersStr);
 
-            successCodesValue = context.getProperty(SUCCESS_CODES).evaluateAttributeExpressions(flowFile).getValue();
-            extractTokenHeader = context.getProperty(EXTRACT_TOKEN_HEADER).evaluateAttributeExpressions(flowFile).getValue();
-            tokenAttributeName = context.getProperty(TOKEN_ATTRIBUTE_NAME).evaluateAttributeExpressions(flowFile).getValue();
-
-            if (tokenAttributeName == null || tokenAttributeName.trim().isEmpty()) {
-                tokenAttributeName = "auth.token";
+            if (debugMode) {
+                getLogger().info("Add Headers to Request is set to: {}", addHeaders);
             }
 
+            successCodesValue = context.getProperty(SUCCESS_CODES).evaluateAttributeExpressions(flowFile).getValue();
+
         } catch (Exception e) {
-            getLogger().error("Failed to evaluate attributes: {}", new Object[]{e.getMessage()}, e);
+            getLogger().error("Failed to evaluate request properties: {}", e.getMessage(), e);
             session.transfer(flowFile, REL_FAILURE);
             return;
         }
@@ -1017,14 +1091,14 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
             // Make initial request and follow pagination links if enabled
             while (hasMorePages && (maxPages == 0 || pageCount < maxPages)) {
                 if (debugMode && pageCount > 0) {
-                    getLogger().info("Fetching page {} with URL: {}", new Object[]{pageCount + 1, currentUrl});
+                    getLogger().info("Fetching page {} with URL: {}", pageCount + 1, currentUrl);
                 }
 
-                // Create HTTP request for current URL
+                // Create HTTP request
                 HttpRequestBase request;
                 try {
                     if (debugMode) {
-                        getLogger().info("Creating HTTP {} request to URL: {}", new Object[]{method, currentUrl});
+                        getLogger().info("Creating HTTP {} request to URL: {}", method, currentUrl);
                     }
 
                     request = createHttpRequest(method, currentUrl);
@@ -1033,20 +1107,37 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                         getLogger().info("Successfully created HTTP request");
                     }
                 } catch (Exception e) {
-                    getLogger().error("Failed to create HTTP request: {}", new Object[]{e.getMessage()}, e);
+                    getLogger().error("Failed to create HTTP request: {}", e.getMessage(), e);
                     session.transfer(flowFile, REL_FAILURE);
                     return;
                 }
 
-                // Add FlowFile headers to request (only for the first page)
-                if ((pageCount == 0) && !createdFlowFile) {
-                    addHeadersToRequest(request, flowFile, addHeaders);
-                    if (debugMode && addHeaders) {
-                        getLogger().info("Added headers from FlowFile to request");
+                // First try to add headers from dynamic properties
+                int dynamicHeadersAdded = processDynamicPropertiesAsHeaders(request, context, flowFile, debugMode);
+
+                // Then add headers from FlowFile attributes (if enabled and it's the first page)
+                if (pageCount == 0) {
+                    addHeadersToRequest(request, flowFile, addHeaders, debugMode);
+
+                    if (debugMode) {
+                        // Log all request headers for verification
+                        StringBuilder allHeaders = new StringBuilder("Final request headers:\n");
+                        for (org.apache.http.Header header : request.getAllHeaders()) {
+                            // Mask sensitive headers
+                            String headerName = header.getName();
+                            String headerValue = header.getValue();
+                            boolean isSensitive = headerName.equalsIgnoreCase("Authorization") ||
+                                    headerName.equalsIgnoreCase("X-API-Key") ||
+                                    headerName.equalsIgnoreCase("api-key");
+                            String logValue = isSensitive ? "********" : headerValue;
+
+                            allHeaders.append("  ").append(headerName).append(": ").append(logValue).append("\n");
+                        }
+                        getLogger().info(allHeaders.toString());
                     }
                 }
 
-                // For methods other than GET and DELETE, use flowfile content as entity (only for the first page)
+                // For methods that require a body, set request entity (only for first page)
                 if (pageCount == 0 && request instanceof HttpEntityEnclosingRequestBase entityRequest) {
                     if (!createdFlowFile && flowFile.getSize() > 0) {
                         // Read FlowFile content
@@ -1058,24 +1149,25 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                             }
                         });
 
-                        // Content type is always application/json as we want to accept JSON format
+                        // Set entity with appropriate content type
                         ContentType requestContentType = ContentType.parse(contentType);
                         entityRequest.setEntity(new StringEntity(new String(content, StandardCharsets.UTF_8), requestContentType));
 
                         if (debugMode) {
-                            getLogger().info("Set request entity from FlowFile content with Content-Type: {}", new Object[]{contentType});
+                            getLogger().info("Set request entity from FlowFile content with Content-Type: {}", contentType);
+                            // Log content preview (limited length)
                             String contentPreview = new String(content, StandardCharsets.UTF_8);
                             if (contentPreview.length() > 1000) {
                                 contentPreview = contentPreview.substring(0, 1000) + "... (truncated)";
                             }
-                            getLogger().info("Request body: {}", new Object[]{contentPreview});
+                            getLogger().info("Request body: {}", contentPreview);
                         }
                     } else {
-                        // Empty entity for methods that require a body but no content is available
-                        entityRequest.setEntity(new StringEntity("", ContentType.parse(contentType != null ? contentType : "application/json")));
+                        // Empty entity for methods that require a body
+                        entityRequest.setEntity(new StringEntity("", ContentType.parse(contentType)));
 
                         if (debugMode) {
-                            getLogger().info("Set empty request entity with Content-Type: {}", new Object[]{contentType});
+                            getLogger().info("Set empty request entity with Content-Type: {}", contentType);
                         }
                     }
                 }
@@ -1084,10 +1176,10 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                 long startNanos = System.nanoTime();
 
                 if (debugMode) {
-                    getLogger().info("Sending {} request to {}", new Object[]{method, currentUrl});
+                    getLogger().info("Sending {} request to {}", method, currentUrl);
                 }
 
-                // Using a single response variable for code clarity
+                // Response variables
                 String responseBody = null;
                 int statusCode = 0;
                 String reasonPhrase = null;
@@ -1099,10 +1191,8 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                     reasonPhrase = response.getStatusLine().getReasonPhrase();
                     responseTime = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
 
-                    if (debugMode) {
-                        getLogger().info("Received response with status code {} in {} ms",
-                                new Object[]{statusCode, responseTime});
-                    }
+                    getLogger().info("Received HTTP response: status={}, reason={}, time={}ms",
+                            statusCode, reasonPhrase, responseTime);
 
                     // Get response headers
                     if (response.getAllHeaders() != null) {
@@ -1112,7 +1202,7 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                             responseHeaders.put(headerName, headerValue);
 
                             if (debugMode) {
-                                getLogger().info("Response header: {} = {}", new Object[]{headerName, headerValue});
+                                getLogger().info("Response header: {} = {}", headerName, headerValue);
                             }
                         }
                     }
@@ -1133,28 +1223,26 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                                     break;
                                 }
                             } else if (range.equals(String.valueOf(statusCode))) {
-                                // Handle exact match (e.g., 200)
+                                // Handle exact match
                                 isSuccess = true;
                                 break;
                             }
                         }
                     } else {
-                        // Default behavior: 2xx is success
+                        // Default: 2xx is success
                         isSuccess = statusCode >= 200 && statusCode < 300;
                     }
 
-                    // If not a success status code, break the pagination loop
+                    // If error status code, stop pagination
                     if (!isSuccess) {
                         if (debugMode) {
-                            getLogger().warn("Received non-success status code: {}. Stopping pagination.",
-                                    new Object[]{statusCode});
+                            getLogger().warn("Received non-success status code: {}. Stopping pagination.", statusCode);
                         }
-                        // Read the response body anyway for error information
+
+                        // Read error response body
                         if (response.getEntity() != null) {
                             responseBody = EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8);
-                            if (debugMode) {
-                                getLogger().warn("Error response body: {}", new Object[]{responseBody});
-                            }
+                            getLogger().warn("Error response body: {}", responseBody);
                         }
                         break;
                     }
@@ -1164,11 +1252,12 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                         responseBody = EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8);
 
                         if (debugMode) {
+                            // Log preview of response body
                             String responseBodyPreview = responseBody;
                             if (responseBody.length() > 1000) {
                                 responseBodyPreview = responseBodyPreview.substring(0, 1000) + "... (truncated)";
                             }
-                            getLogger().info("Response body: {}", new Object[]{responseBodyPreview});
+                            getLogger().info("Response body: {}", responseBodyPreview);
                         }
 
                         // Add the response to all responses for pagination
@@ -1179,26 +1268,21 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                         allResponses.add(responseBody);
                     }
 
-                    // Handle pagination if enabled - only process JSON for pagination if needed
-                    if (enablePagination) {
-                        if (responseBody != null && !responseBody.isEmpty()) {
-                            // Extract next link from response
-                            String nextLink = extractNextLink(responseBody, paginationMode, customJsonPath, debugMode);
+                    // Handle pagination if enabled
+                    if (enablePagination && responseBody != null && !responseBody.isEmpty()) {
+                        // Extract next link from response
+                        String nextLink = extractNextLink(responseBody, paginationMode, customJsonPath, debugMode);
 
-                            if (nextLink != null && !nextLink.isEmpty()) {
-                                // Use the next link for the next request
-                                currentUrl = nextLink;
-                                pageCount++;
-                            } else {
-                                // No more pages
-                                hasMorePages = false;
-                            }
+                        if (nextLink != null && !nextLink.isEmpty()) {
+                            // Use the next link for the next request
+                            currentUrl = nextLink;
+                            pageCount++;
                         } else {
-                            // No response body, no pagination
+                            // No more pages
                             hasMorePages = false;
                         }
                     } else {
-                        // Pagination not enabled
+                        // Pagination not enabled or no response body
                         hasMorePages = false;
                     }
                 }
@@ -1206,29 +1290,29 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                 // Release request resources
                 request.releaseConnection();
 
-                // If not processing pagination, or if we've reached the maximum number of pages, exit the loop
-                if (!enablePagination || (maxPages > 0 && pageCount >= maxPages)) {
+                // Stop pagination if reached max pages
+                if (maxPages > 0 && pageCount >= maxPages) {
                     hasMorePages = false;
                 }
-            } // End of pagination loop
+            } // End pagination loop
 
             // Create the final FlowFile with response content
             FlowFile resultFlowFile;
             if (createdFlowFile) {
-                // If we created the original FlowFile (no input), create a new one for the result
+                // Create new FlowFile for result
                 resultFlowFile = session.create();
                 if (debugMode) {
                     getLogger().info("Created new result FlowFile");
                 }
             } else {
-                // Use the incoming FlowFile as the result
+                // Use the incoming FlowFile as result
                 resultFlowFile = flowFile;
                 if (debugMode) {
                     getLogger().info("Using incoming FlowFile as result FlowFile");
                 }
             }
 
-            // Determine which response to use
+            // Determine which response to use for the final result
             final String finalResponseBody;
             if (allResponses.isEmpty()) {
                 finalResponseBody = "";
@@ -1236,33 +1320,31 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                     getLogger().warn("No responses received");
                 }
             } else if (!enablePagination || !combineResults || allResponses.size() == 1) {
-                // If pagination is not enabled, or combining is not requested, or there's only one response,
-                // use the last response
+                // Use the last response if pagination not enabled, combining not requested, or only one response
                 finalResponseBody = allResponses.get(allResponses.size() - 1);
                 if (debugMode && allResponses.size() > 1) {
-                    getLogger().info("Using last response (page {}) as final result", new Object[]{allResponses.size()});
+                    getLogger().info("Using last response (page {}) as final result", allResponses.size());
                 }
             } else {
-                // If pagination is enabled and combining is requested, try to intelligently combine JSON results
-                // if a pagination JSON path is provided
-                if (paginationJsonPath != null && !paginationJsonPath.isEmpty() ) {
+                // Try to combine results if pagination is enabled and combining is requested
+                if (paginationJsonPath != null && !paginationJsonPath.isEmpty()) {
                     String combinedJson = combineJsonResults(allResponses, paginationJsonPath, debugMode);
                     if (combinedJson != null) {
                         finalResponseBody = combinedJson;
                         if (debugMode) {
                             getLogger().info("Combined {} pages using JSON path: {}",
-                                    new Object[]{allResponses.size(), paginationJsonPath});
+                                    allResponses.size(), paginationJsonPath);
                         }
                     } else {
                         // If combining failed, use the last response
                         finalResponseBody = allResponses.get(allResponses.size() - 1);
                         if (debugMode) {
-                            getLogger().warn("Failed to combine responses using JSON path: {}, using last response instead",
-                                    new Object[]{paginationJsonPath});
+                            getLogger().warn("Failed to combine responses using JSON path: {}, using last response",
+                                    paginationJsonPath);
                         }
                     }
                 } else {
-                    // If no pagination JSON path is provided, do a simple concatenation
+                    // Simple concatenation if no JSON path provided
                     StringBuilder combined = new StringBuilder();
                     for (int i = 0; i < allResponses.size(); i++) {
                         if (i > 0) combined.append("\n");
@@ -1270,8 +1352,7 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                     }
                     finalResponseBody = combined.toString();
                     if (debugMode) {
-                        getLogger().info("Combined {} responses by simple concatenation (no JSON path provided)",
-                                new Object[]{allResponses.size()});
+                        getLogger().info("Combined {} responses by simple concatenation", allResponses.size());
                     }
                 }
             }
@@ -1309,11 +1390,10 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                 getLogger().info("Transferred FlowFile to SUCCESS relationship");
             } else {
                 getLogger().info("Successfully processed HTTP request to {} with pagination (fetched {} pages)",
-                        new Object[]{url, allResponses.size()});
+                        url, allResponses.size());
             }
 
-            // If we created the original FlowFile (when there was no input) and we're not using it as the result,
-            // remove it to avoid clutter
+            // Clean up
             if (createdFlowFile && resultFlowFile != flowFile) {
                 session.remove(flowFile);
                 if (debugMode) {
@@ -1322,19 +1402,16 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
             }
         } catch (IOException e) {
             // Network error occurred, send to retry
+            getLogger().error("Network error while sending HTTP request to {}: {}", url, e.getMessage());
             if (debugMode) {
-                getLogger().error("Network error while sending HTTP request to {}: {}", new Object[]{url, e.getMessage()}, e);
-            } else {
-                getLogger().error("Network error while sending HTTP request to {}: {}", new Object[]{url, e.getMessage()}, e);
+                getLogger().error("Network error details:", e);
             }
             session.transfer(flowFile, REL_RETRY);
         } catch (Exception e) {
             // Other errors, send to failure
+            getLogger().error("Failed to send HTTP request to {}: {}", url, e.getMessage());
             if (debugMode) {
-                getLogger().error("Failed to send HTTP request to {}: {}", new Object[]{url, e.getMessage()}, e);
-                getLogger().error("Stack trace:", e);
-            } else {
-                getLogger().error("Failed to send HTTP request to {}: {}", new Object[]{url, e.getMessage()}, e);
+                getLogger().error("Error details:", e);
             }
             session.transfer(flowFile, REL_FAILURE);
         }

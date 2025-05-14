@@ -79,7 +79,7 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
             .name("LDAP URL")
             .description("The URL of the LDAP server. Format: ldap://hostname:port or ldaps://hostname:port")
             .required(true)
-            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .expressionLanguageSupported(ExpressionLanguageScope.ENVIRONMENT)
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
             .build();
 
@@ -89,14 +89,14 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
             .required(true)
             .allowableValues("SEARCH", "ADD", "MODIFY", "DELETE", "BIND", "UNBIND")
             .defaultValue("SEARCH")
-            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .expressionLanguageSupported(ExpressionLanguageScope.ENVIRONMENT)
             .build();
 
     public static final PropertyDescriptor BASE_DN = new PropertyDescriptor.Builder()
             .name("Base DN")
             .description("The base DN for LDAP operations")
             .required(false)
-            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .expressionLanguageSupported(ExpressionLanguageScope.ENVIRONMENT)
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
             .build();
 
@@ -104,7 +104,7 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
             .name("Search Filter")
             .description("The filter to use for LDAP search operations (e.g., (objectClass=person))")
             .required(false)
-            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .expressionLanguageSupported(ExpressionLanguageScope.ENVIRONMENT)
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
             .build();
 
@@ -114,14 +114,14 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
             .required(false)
             .allowableValues("OBJECT_SCOPE", "ONELEVEL_SCOPE", "SUBTREE_SCOPE")
             .defaultValue("SUBTREE_SCOPE")
-            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .expressionLanguageSupported(ExpressionLanguageScope.ENVIRONMENT)
             .build();
 
     public static final PropertyDescriptor RETURN_ATTRIBUTES = new PropertyDescriptor.Builder()
             .name("Return Attributes")
             .description("Comma-separated list of attributes to return in search results. Leave blank for all attributes.")
             .required(false)
-            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .expressionLanguageSupported(ExpressionLanguageScope.ENVIRONMENT)
             .addValidator(StandardValidators.NON_BLANK_VALIDATOR)
             .build();
 
@@ -129,7 +129,7 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
             .name("Bind DN")
             .description("The username (DN) to bind to the LDAP server")
             .required(false)
-            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .expressionLanguageSupported(ExpressionLanguageScope.ENVIRONMENT)
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
             .sensitive(false)
             .build();
@@ -138,7 +138,7 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
             .name("Bind Password")
             .description("The password to use when binding to the LDAP server")
             .required(false)
-            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .expressionLanguageSupported(ExpressionLanguageScope.ENVIRONMENT)
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
             .sensitive(true)
             .build();
@@ -148,7 +148,7 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
             .description("The page size to use for paged LDAP search operations. Set to 0 to disable paging.")
             .required(false)
             .defaultValue("1000")
-            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .expressionLanguageSupported(ExpressionLanguageScope.ENVIRONMENT)
             .addValidator(StandardValidators.NON_NEGATIVE_INTEGER_VALIDATOR)
             .build();
 
@@ -158,7 +158,7 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
             .required(true)
             .defaultValue("5000")
             .addValidator(StandardValidators.POSITIVE_INTEGER_VALIDATOR)
-            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .expressionLanguageSupported(ExpressionLanguageScope.ENVIRONMENT)
             .build();
 
     public static final PropertyDescriptor READ_TIMEOUT = new PropertyDescriptor.Builder()
@@ -167,7 +167,7 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
             .required(true)
             .defaultValue("30000")
             .addValidator(StandardValidators.POSITIVE_INTEGER_VALIDATOR)
-            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .expressionLanguageSupported(ExpressionLanguageScope.ENVIRONMENT)
             .build();
 
     public static final PropertyDescriptor BYPASS_SSL_VALIDATION = new PropertyDescriptor.Builder()
@@ -176,7 +176,7 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
             .required(true)
             .allowableValues("true", "false")
             .defaultValue("false")
-            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .expressionLanguageSupported(ExpressionLanguageScope.ENVIRONMENT)
             .build();
 
     public static final PropertyDescriptor REFERRAL_HANDLING = new PropertyDescriptor.Builder()
@@ -185,7 +185,7 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
             .required(true)
             .allowableValues("follow", "ignore", "throw")
             .defaultValue("ignore")
-            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .expressionLanguageSupported(ExpressionLanguageScope.ENVIRONMENT)
             .build();
 
     public static final PropertyDescriptor DEBUG_MODE = new PropertyDescriptor.Builder()
@@ -202,7 +202,7 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
             .required(true)
             .allowableValues("JSON", "LDIF")
             .defaultValue("JSON")
-            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .expressionLanguageSupported(ExpressionLanguageScope.ENVIRONMENT)
             .build();
 
     // Relationships
