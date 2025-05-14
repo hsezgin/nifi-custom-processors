@@ -333,23 +333,21 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
         // HTTP header support
         if (propertyDescriptorName.startsWith("http.header.")) {
             boolean isSensitiveHeader = propertyDescriptorName.equalsIgnoreCase("http.header.Authorization") ||
-                    propertyDescriptorName.equalsIgnoreCase("http.header.X-API-Key") ||
-                    propertyDescriptorName.equalsIgnoreCase("http.header.api-key");
+                    propertyDescriptorName.equalsIgnoreCase("http.header.X-API-Key");
 
-            return new PropertyDescriptor.Builder()
+            PropertyDescriptor.Builder builder = new PropertyDescriptor.Builder()
                     .name(propertyDescriptorName)
                     .displayName(propertyDescriptorName.substring("http.header.".length()) + " Header")
                     .description("HTTP Header: Sets the '" + propertyDescriptorName.substring("http.header.".length()) +
                             "' HTTP header value for the request")
                     .required(false)
                     .dynamic(true)
-                    .sensitive(isSensitiveHeader) // Mark sensitive headers
-                    .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
-                    .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
-                    .build();
+                    .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES);
+
+            return builder.addValidator(StandardValidators.NON_EMPTY_VALIDATOR).build();
         }
 
-        return null; // Return null for other dynamic properties
+        return null;
     }
 
     /**
