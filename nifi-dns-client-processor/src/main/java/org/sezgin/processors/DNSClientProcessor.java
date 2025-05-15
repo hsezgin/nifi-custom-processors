@@ -307,13 +307,32 @@ public class DNSClientProcessor extends AbstractProcessor {
         // Format the results based on record type using switch expression
         switch (result.type()) {
             case TYPE_A -> {
-                if (result.results().size() == 1) {
-                    // Single A record
-                    rootNode.put("ip", result.results().getFirst());
-                } else {
-                    // Multiple A records
-                    ArrayNode ipsArray = rootNode.putArray("ips");
-                    result.results().forEach(ipsArray::add);
+                ObjectNode aRecords = objectMapper.createObjectNode();
+
+                // IP adreslerini ayrı bir diziye ekle
+                ArrayNode ipArray = aRecords.putArray("ip_addresses");
+
+                // CNAME kayıtlarını ayrı bir diziye ekle
+                ArrayNode cnameArray = aRecords.putArray("cnames");
+
+                // Sonuçları ayrıştır - 'item' adını kullanarak çakışmayı önlüyoruz
+                for (String item : result.results()) {
+                    if (item.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")) {
+                        // IPv4 adresi
+                        ipArray.add(item);
+                    } else {
+                        // Hostname/CNAME
+                        cnameArray.add(item);
+                    }
+                }
+
+                // Ana JSON nesnesine ekle
+                if (!ipArray.isEmpty()) {
+                    rootNode.set("ip_addresses", ipArray);
+                }
+
+                if (!cnameArray.isEmpty()) {
+                    rootNode.set("cnames", cnameArray);
                 }
             }
             case TYPE_AAAA -> {
@@ -435,7 +454,15 @@ public class DNSClientProcessor extends AbstractProcessor {
                     case AAAARecord r -> r.getAddress().getHostAddress();
                     case MXRecord r -> r.getPriority() + " " + r.getTarget().toString(true);
                     case NSRecord r -> r.getTarget().toString(true);
-                    case TXTRecord r -> r.rdataToString();
+                    case TXTRecord r -> {
+                        StringBuilder sb = new StringBuilder();
+                        // TXTRecord'ın tüm string parçalarını alıp birleştiriyoruz
+                        for (String txtPart : r.getStrings()) {
+                            // TXTRecord'ın her bir parçasını temiz şekilde alıyoruz
+                            sb.append(txtPart);
+                        }
+                        yield sb.toString();
+                    }
                     case CNAMERecord r -> r.getTarget().toString(true);
                     case SOARecord r -> r.rdataToString();
                     case PTRRecord r -> r.getTarget().toString(true);
