@@ -12,6 +12,7 @@
     <properties>
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
+        <maven.compiler.release>21</maven.compiler.release>
         <nifi.version>2.1.0</nifi.version>
         <jackson.version>2.15.2</jackson.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -20,6 +21,7 @@
     <modules>
         <module>nifi-insecure-http-processor</module>
         <module>nifi-insecure-ldap-processor</module>
+        <module>nifi-dns-client-processor</module>
     </modules>
 
     <dependencyManagement>
