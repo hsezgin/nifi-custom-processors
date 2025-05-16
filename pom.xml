@@ -22,6 +22,7 @@
         <module>nifi-insecure-http-processor</module>
         <module>nifi-insecure-ldap-processor</module>
         <module>nifi-dns-client-processor</module>
+        <module>nifi-json-schema-generator</module>
     </modules>
 
     <dependencyManagement>
@@ -43,6 +44,14 @@
                 <artifactId>nifi-standard-processors</artifactId>
                 <version>${nifi.version}</version>
                 <scope>provided</scope>
+            </dependency>
+
+            <!-- Added NiFi Mock for testing -->
+            <dependency>
+                <groupId>org.apache.nifi</groupId>
+                <artifactId>nifi-mock</artifactId>
+                <version>${nifi.version}</version>
+                <scope>test</scope>
             </dependency>
 
             <!-- HTTP dependencies -->
@@ -74,6 +83,18 @@
                 <groupId>org.junit.jupiter</groupId>
                 <artifactId>junit-jupiter-api</artifactId>
                 <version>5.10.1</version>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.junit.jupiter</groupId>
+                <artifactId>junit-jupiter-engine</artifactId>
+                <version>5.10.1</version>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>junit</groupId>
+                <artifactId>junit</artifactId>
+                <version>4.13.2</version>
                 <scope>test</scope>
             </dependency>
             <dependency>
