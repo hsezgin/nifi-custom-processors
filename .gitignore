@@ -1,5 +1,5 @@
 target/
-!target/insecure-invoke-http-*
+!**/target/*.nar
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
