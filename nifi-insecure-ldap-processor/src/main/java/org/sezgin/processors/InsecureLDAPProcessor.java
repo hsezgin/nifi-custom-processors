@@ -125,6 +125,16 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
             .addValidator(StandardValidators.NON_BLANK_VALIDATOR)
             .build();
 
+    public static final PropertyDescriptor BINARY_ATTRIBUTES = new PropertyDescriptor.Builder()
+            .name("Binary Attributes")
+            .description("Comma-separated list of LDAP attributes that should be treated as binary data and " +
+                    "converted to readable format (objectGUID to UUID, objectSid to SID string, etc). " +
+                    "Example: objectGUID,objectSid")
+            .required(false)
+            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
+            .build();
+
     public static final PropertyDescriptor USERNAME = new PropertyDescriptor.Builder()
             .name("Bind DN")
             .description("The username (DN) to bind to the LDAP server")
@@ -229,6 +239,7 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
         descriptors.add(SEARCH_FILTER);
         descriptors.add(SEARCH_SCOPE);
         descriptors.add(RETURN_ATTRIBUTES);
+        descriptors.add(BINARY_ATTRIBUTES);
         descriptors.add(USERNAME);
         descriptors.add(PASSWORD);
         descriptors.add(PAGE_SIZE);
@@ -262,7 +273,7 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
     private LdapContext createLdapContext(String ldapUrl, String username, String password,
                                           int connectTimeout, int readTimeout,
                                           boolean bypassSslValidation, String referralHandling,
-                                          boolean debugMode) throws NamingException {
+                                          Set<String> binaryAttributes, boolean debugMode) throws NamingException {
 
         // Set up the environment for creating the initial context
         Hashtable<String, Object> env = new Hashtable<>();
@@ -287,6 +298,24 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
 
         // Set referral handling
         env.put(Context.REFERRAL, referralHandling);
+
+        // Configure binary attributes
+        if (!binaryAttributes.isEmpty()) {
+            StringBuilder binaryAttrsBuilder = new StringBuilder();
+            for (String attr : binaryAttributes) {
+                if (binaryAttrsBuilder.length() > 0) {
+                    binaryAttrsBuilder.append(" ");
+                }
+                binaryAttrsBuilder.append(attr);
+            }
+
+            String binaryAttrsConfig = binaryAttrsBuilder.toString();
+            env.put("java.naming.ldap.attributes.binary", binaryAttrsConfig);
+
+            if (debugMode) {
+                getLogger().info("Configured binary attributes for LDAP: {}", new Object[]{binaryAttrsConfig});
+            }
+        }
 
         if (debugMode) {
             getLogger().info("Creating LDAP context with URL: {}, Username: {}, Bypass SSL: {}, Referral: {}",
@@ -417,7 +446,7 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
     /**
      * Convert search results to JSON format
      */
-    private String convertResultsToJson(List<SearchResult> results, boolean debugMode) {
+    private String convertResultsToJson(List<SearchResult> results, boolean debugMode, Set<String> binaryAttributes) {
         try {
             ObjectNode rootNode = objectMapper.createObjectNode();
             ArrayNode entriesNode = objectMapper.createArrayNode();
@@ -436,11 +465,10 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
                 while (allAttributes.hasMore()) {
                     Attribute attribute = allAttributes.next();
                     String attributeName = attribute.getID();
+                    String attributeNameLower = attributeName.toLowerCase();
 
-                    // Skip binary attributes
-                    if (attributeName.toLowerCase().contains(";binary")) {
-                        continue;
-                    }
+                    // Check if this is a binary attribute that needs conversion
+                    boolean isBinaryAttribute = binaryAttributes.contains(attributeNameLower);
 
                     // Handle multi-valued attributes
                     if (attribute.size() > 1) {
@@ -450,7 +478,13 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
                         while (values.hasMore()) {
                             Object value = values.next();
                             if (value != null) {
-                                valuesNode.add(value.toString());
+                                if (isBinaryAttribute && value instanceof byte[]) {
+                                    // Convert binary data to formatted string
+                                    String formattedValue = formatBinaryAttribute((byte[]) value, attributeNameLower);
+                                    valuesNode.add(formattedValue);
+                                } else {
+                                    valuesNode.add(value.toString());
+                                }
                             }
                         }
 
@@ -459,7 +493,13 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
                         // Single-valued attribute
                         Object value = attribute.get();
                         if (value != null) {
-                            attributesNode.put(attributeName, value.toString());
+                            if (isBinaryAttribute && value instanceof byte[]) {
+                                // Convert binary data to formatted string
+                                String formattedValue = formatBinaryAttribute((byte[]) value, attributeNameLower);
+                                attributesNode.put(attributeName, formattedValue);
+                            } else {
+                                attributesNode.put(attributeName, value.toString());
+                            }
                         }
                     }
                 }
@@ -476,6 +516,77 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
         } catch (Exception e) {
             getLogger().error("Failed to convert LDAP results to JSON: {}", new Object[]{e.getMessage()}, e);
             return "{\"error\":\"Failed to convert results to JSON\"}";
+        }
+    }
+
+    /**
+     * Formats binary attribute values based on attribute type
+     * @param binaryData The binary data to format
+     * @param attributeName The name of the attribute (lowercase)
+     * @return A formatted string representation of the binary data
+     */
+    private String formatBinaryAttribute(byte[] binaryData, String attributeName) {
+        if (binaryData == null || binaryData.length == 0) {
+            return "";
+        }
+
+        try {
+            // Format GUID
+            if (attributeName.equals("objectguid")) {
+                if (binaryData.length != 16) {
+                    return Base64.getEncoder().encodeToString(binaryData);
+                }
+
+                return String.format("%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+                        binaryData[3] & 0xFF, binaryData[2] & 0xFF, binaryData[1] & 0xFF, binaryData[0] & 0xFF,
+                        binaryData[5] & 0xFF, binaryData[4] & 0xFF,
+                        binaryData[7] & 0xFF, binaryData[6] & 0xFF,
+                        binaryData[8] & 0xFF, binaryData[9] & 0xFF,
+                        binaryData[10] & 0xFF, binaryData[11] & 0xFF, binaryData[12] & 0xFF,
+                        binaryData[13] & 0xFF, binaryData[14] & 0xFF, binaryData[15] & 0xFF);
+            }
+
+            // Format SID
+            else if (attributeName.equals("objectsid")) {
+                if (binaryData.length < 8) {
+                    return Base64.getEncoder().encodeToString(binaryData);
+                }
+
+                StringBuilder strSid = new StringBuilder("S-");
+
+                // SID-Revision (1 byte)
+                strSid.append(binaryData[0]).append("-");
+
+                // Authority (6 bytes)
+                long authority = 0;
+                for (int i = 2; i <= 7; i++) {
+                    authority = (authority << 8) | (binaryData[i] & 0xFF);
+                }
+                strSid.append(authority);
+
+                // Sub-authorities
+                int subAuthorityCount = binaryData[1] & 0xFF;
+                int offset = 8;
+                for (int i = 0; i < subAuthorityCount; i++) {
+                    if (offset + 4 <= binaryData.length) {
+                        long subAuthority = 0;
+                        for (int j = 0; j < 4; j++) {
+                            subAuthority |= (long)(binaryData[offset + j] & 0xFF) << (8 * j);
+                        }
+                        strSid.append("-").append(subAuthority);
+                        offset += 4;
+                    }
+                }
+
+                return strSid.toString();
+            }
+
+            // For other binary attributes, just return Base64 encoding
+            return Base64.getEncoder().encodeToString(binaryData);
+
+        } catch (Exception e) {
+            getLogger().warn("Error formatting binary attribute: " + e.getMessage());
+            return Base64.getEncoder().encodeToString(binaryData);
         }
     }
 
@@ -722,6 +833,16 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
         final String referralHandling = context.getProperty(REFERRAL_HANDLING).evaluateAttributeExpressions(flowFile).getValue();
         final String outputFormat = context.getProperty(OUTPUT_FORMAT).evaluateAttributeExpressions(flowFile).getValue();
 
+        // Get binary attributes list
+        final String binaryAttrsStr = context.getProperty(BINARY_ATTRIBUTES).evaluateAttributeExpressions(flowFile).getValue();
+        Set<String> binaryAttributes = new HashSet<>();
+
+        if (binaryAttrsStr != null && !binaryAttrsStr.trim().isEmpty()) {
+            for (String attr : binaryAttrsStr.split(",")) {
+                binaryAttributes.add(attr.trim().toLowerCase());
+            }
+        }
+
         // Process return attributes
         String[] returnAttributes = null;
         if (returnAttributesStr != null && !returnAttributesStr.trim().isEmpty()) {
@@ -736,7 +857,7 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
         try {
             // Create LDAP context
             ldapContext = createLdapContext(ldapUrl, username, password, connectTimeout, readTimeout,
-                    bypassSslValidation, referralHandling, debugMode);
+                    bypassSslValidation, referralHandling, binaryAttributes, debugMode);
 
             // Prepare result - using AtomicReference to make it effectively final for inner classes
             final AtomicReference<String> resultRef = new AtomicReference<>("");
@@ -752,7 +873,7 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
 
                     // Convert results to requested format
                     if ("JSON".equalsIgnoreCase(outputFormat)) {
-                        resultRef.set(convertResultsToJson(searchResults, debugMode));
+                        resultRef.set(convertResultsToJson(searchResults, debugMode, binaryAttributes));
                     } else {
                         resultRef.set(convertResultsToLdif(searchResults, debugMode));
                     }
