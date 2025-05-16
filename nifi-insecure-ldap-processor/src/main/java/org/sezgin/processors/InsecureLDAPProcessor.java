@@ -129,7 +129,7 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
             .name("Binary Attributes")
             .description("Comma-separated list of LDAP attributes that should be treated as binary data and " +
                     "converted to readable format (objectGUID to UUID, objectSid to SID string, etc). " +
-                    "Example: objectGUID,objectSid")
+                    "Example: objectGUID,objectSid,nTSecurityDescriptor")
             .required(false)
             .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
@@ -215,6 +215,29 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
             .expressionLanguageSupported(ExpressionLanguageScope.ENVIRONMENT)
             .build();
 
+    // Yeni eklenen LDAP Kontrol Desteği özellikleri
+    public static final PropertyDescriptor LDAP_CONTROLS = new PropertyDescriptor.Builder()
+            .name("LDAP Controls")
+            .description("Comma-separated list of LDAP controls to send with requests. Format: OID|critical|value " +
+                    "Example: 1.2.840.113556.1.4.801|true|7 for SD Flags control. " +
+                    "Value can be decimal, hex (0x prefix), or empty. " +
+                    "For complex controls, leave value empty and use Control Value Format property.")
+            .required(false)
+            .expressionLanguageSupported(ExpressionLanguageScope.ENVIRONMENT)
+            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
+            .build();
+
+    public static final PropertyDescriptor CONTROL_VALUE_FORMAT = new PropertyDescriptor.Builder()
+            .name("Control Value Format")
+            .description("Format of the control value(s). For simple values, leave blank. " +
+                    "Options: empty, int8, hex, ber. " +
+                    "For ber, the value is a hex string representing BER encoded data.")
+            .required(false)
+            .allowableValues("", "int8", "hex", "ber")
+            .defaultValue("")
+            .expressionLanguageSupported(ExpressionLanguageScope.ENVIRONMENT)
+            .build();
+
     // Relationships
     public static final Relationship REL_SUCCESS = new Relationship.Builder()
             .name("success")
@@ -249,6 +272,9 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
         descriptors.add(REFERRAL_HANDLING);
         descriptors.add(DEBUG_MODE);
         descriptors.add(OUTPUT_FORMAT);
+        // Yeni LDAP Kontrol özellikleri eklendi
+        descriptors.add(LDAP_CONTROLS);
+        descriptors.add(CONTROL_VALUE_FORMAT);
         this.descriptors = Collections.unmodifiableList(descriptors);
 
         final Set<Relationship> relationships = new HashSet<>();
@@ -265,6 +291,116 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
     @Override
     public final List<PropertyDescriptor> getSupportedPropertyDescriptors() {
         return descriptors;
+    }
+
+    /**
+     * LDAP kontrol listesini ayrıştırıp oluşturan yardımcı metot
+     */
+    private Control[] parseAndCreateLdapControls(String controlsConfig, String valueFormat, boolean debugMode) {
+        if (controlsConfig == null || controlsConfig.trim().isEmpty()) {
+            return null;
+        }
+
+        List<Control> controls = new ArrayList<>();
+        String[] controlConfigs = controlsConfig.split(",");
+
+        for (String controlConfig : controlConfigs) {
+            controlConfig = controlConfig.trim();
+            if (controlConfig.isEmpty()) {
+                continue;
+            }
+
+            try {
+                // OID|critical|value formatını ayrıştır
+                String[] parts = controlConfig.split("\\|");
+                if (parts.length < 2) {
+                    getLogger().warn("Invalid control format: {}, expected OID|critical|value", new Object[]{controlConfig});
+                    continue;
+                }
+
+                String oid = parts[0].trim();
+                boolean critical = Boolean.parseBoolean(parts[1].trim());
+                String valueStr = parts.length > 2 ? parts[2].trim() : "";
+
+                // Kontrol değerini formatına göre dönüştür
+                byte[] value = null;
+                if (!valueStr.isEmpty()) {
+                    if ("int8".equals(valueFormat)) {
+                        // Tek bayt değeri
+                        int intValue = valueStr.startsWith("0x")
+                                ? Integer.parseInt(valueStr.substring(2), 16)
+                                : Integer.parseInt(valueStr);
+                        value = new byte[]{(byte) intValue};
+                    } else if ("hex".equals(valueFormat)) {
+                        // Hex değer
+                        String hexStr = valueStr.startsWith("0x") ? valueStr.substring(2) : valueStr;
+                        value = hexStringToByteArray(hexStr);
+                    } else if ("ber".equals(valueFormat)) {
+                        // BER kodlanmış değer
+                        String hexStr = valueStr.startsWith("0x") ? valueStr.substring(2) : valueStr;
+                        value = hexStringToByteArray(hexStr);
+                    } else {
+                        // Standart SD Flags için otomatik BER formatı oluştur
+                        if (oid.equals("1.2.840.113556.1.4.801")) {
+                            int intValue = valueStr.startsWith("0x")
+                                    ? Integer.parseInt(valueStr.substring(2), 16)
+                                    : Integer.parseInt(valueStr);
+                            // 0x30 = SEQUENCE, 0x03 = length, 0x02 = INTEGER, 0x01 = length, son bayt = değer
+                            value = new byte[]{0x30, 0x03, 0x02, 0x01, (byte) intValue};
+                        } else {
+                            // Değer bir tamsayı olarak değerlendir
+                            try {
+                                int intValue = valueStr.startsWith("0x")
+                                        ? Integer.parseInt(valueStr.substring(2), 16)
+                                        : Integer.parseInt(valueStr);
+                                value = new byte[]{(byte) intValue};
+                            } catch (NumberFormatException e) {
+                                getLogger().warn("Invalid control value: {}, expected number or hex", new Object[]{valueStr});
+                            }
+                        }
+                    }
+                }
+
+                // Kontrol nesnesini oluştur
+                Control control = new BasicControl(oid, critical, value);
+                controls.add(control);
+
+                if (debugMode) {
+                    getLogger().info("Added LDAP control: OID={}, critical={}, value={}",
+                            new Object[]{oid, critical, value != null ? bytesToHex(value) : "null"});
+                }
+            } catch (Exception e) {
+                getLogger().error("Failed to parse control config: {}", new Object[]{controlConfig}, e);
+            }
+        }
+
+        return controls.isEmpty() ? null : controls.toArray(new Control[0]);
+    }
+
+    /**
+     * Hex string'i byte dizisine dönüştürür
+     */
+    private byte[] hexStringToByteArray(String hex) {
+        int len = hex.length();
+        byte[] data = new byte[len / 2];
+
+        for (int i = 0; i < len; i += 2) {
+            data[i / 2] = (byte) ((Character.digit(hex.charAt(i), 16) << 4)
+                    + Character.digit(hex.charAt(i+1), 16));
+        }
+
+        return data;
+    }
+
+    /**
+     * Byte dizisini hex string'e dönüştürür
+     */
+    private String bytesToHex(byte[] bytes) {
+        StringBuilder result = new StringBuilder();
+        for (byte b : bytes) {
+            result.append(String.format("%02X", b));
+        }
+        return result.toString();
     }
 
     /**
@@ -341,7 +477,8 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
      */
     private List<SearchResult> performSearch(LdapContext ctx, String baseDn, String filter,
                                              String scope, String[] returnAttributes,
-                                             int pageSize, boolean debugMode) throws NamingException {
+                                             int pageSize, Control[] additionalControls,
+                                             boolean debugMode) throws NamingException {
 
         List<SearchResult> allResults = new ArrayList<>();
         NamingEnumeration<SearchResult> results = null;
@@ -374,11 +511,36 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
                         new Object[]{baseDn, filter, scope, returnAttributes != null ? String.join(",", returnAttributes) : "all", pageSize});
             }
 
+            // Kontrolleri birleştir
+            List<Control> requestControls = new ArrayList<>();
+
+            // Sayfalama kontrolü ekle
+            if (pageSize > 0) {
+                requestControls.add(new PagedResultsControl(pageSize, Control.CRITICAL));
+            }
+
+            // Ek kontrolleri ekle
+            if (additionalControls != null && additionalControls.length > 0) {
+                Collections.addAll(requestControls, additionalControls);
+
+                if (debugMode) {
+                    getLogger().info("Added {} additional controls to LDAP search", new Object[]{additionalControls.length});
+                }
+            }
+
+            // Kontrolleri ayarla
+            if (!requestControls.isEmpty()) {
+                ctx.setRequestControls(requestControls.toArray(new Control[0]));
+
+                if (debugMode) {
+                    getLogger().info("Set {} request controls for LDAP search", new Object[]{requestControls.size()});
+                }
+            }
+
             // If paging is enabled
             if (pageSize > 0) {
                 // Initialize paged results control
                 byte[] cookie = null;
-                ctx.setRequestControls(new Control[] { new PagedResultsControl(pageSize, Control.CRITICAL) });
 
                 do {
                     try {
@@ -407,8 +569,18 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
                         }
                     }
 
-                    // Re-activate paged results
-                    ctx.setRequestControls(new Control[] { new PagedResultsControl(pageSize, cookie, Control.CRITICAL) });
+                    // Re-activate paged results with additional controls
+                    if (cookie != null && cookie.length > 0) {
+                        requestControls = new ArrayList<>();
+                        requestControls.add(new PagedResultsControl(pageSize, cookie, Control.CRITICAL));
+
+                        // Ek kontrolleri yeniden ekle
+                        if (additionalControls != null && additionalControls.length > 0) {
+                            Collections.addAll(requestControls, additionalControls);
+                        }
+
+                        ctx.setRequestControls(requestControls.toArray(new Control[0]));
+                    }
 
                 } while (cookie != null && cookie.length > 0);
 
@@ -581,6 +753,52 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
                 return strSid.toString();
             }
 
+            // nTSecurityDescriptor formatını işle
+            else if (attributeName.equals("ntsecuritydescriptor")) {
+                // Base64 kodlamasına ek olarak, bazı temel bilgileri çıkarabiliriz
+                String base64Value = Base64.getEncoder().encodeToString(binaryData);
+
+                StringBuilder sdInfo = new StringBuilder();
+                sdInfo.append("Security Descriptor (");
+
+                try {
+                    // Temel bilgileri ekle
+                    int revision = binaryData[0] & 0xFF;
+                    int controlFlags = ((binaryData[1] & 0xFF) << 8) | (binaryData[2] & 0xFF);
+
+                    sdInfo.append("Rev:").append(revision).append(", ");
+                    sdInfo.append("Flags:0x").append(Integer.toHexString(controlFlags));
+
+                    // Bayrağı yorumla
+                    if ((controlFlags & 0x01) != 0) sdInfo.append(" SE_OWNER_DEFAULTED");
+                    if ((controlFlags & 0x02) != 0) sdInfo.append(" SE_GROUP_DEFAULTED");
+                    if ((controlFlags & 0x04) != 0) sdInfo.append(" SE_DACL_PRESENT");
+                    if ((controlFlags & 0x08) != 0) sdInfo.append(" SE_DACL_DEFAULTED");
+                    if ((controlFlags & 0x10) != 0) sdInfo.append(" SE_SACL_PRESENT");
+                    if ((controlFlags & 0x20) != 0) sdInfo.append(" SE_SACL_DEFAULTED");
+
+                    sdInfo.append(")");
+
+                    // Offset değerlerini ekle
+                    if (binaryData.length >= 20) {
+                        int ownerOffset = bytesToInt(binaryData, 4);
+                        int groupOffset = bytesToInt(binaryData, 8);
+                        int saclOffset = bytesToInt(binaryData, 12);
+                        int daclOffset = bytesToInt(binaryData, 16);
+
+                        sdInfo.append(" Offsets: Owner=").append(ownerOffset);
+                        sdInfo.append(", Group=").append(groupOffset);
+                        sdInfo.append(", SACL=").append(saclOffset);
+                        sdInfo.append(", DACL=").append(daclOffset);
+                    }
+
+                    return sdInfo.toString();
+                } catch (Exception e) {
+                    // Hata durumunda sadece Base64 değerini döndür
+                    return base64Value;
+                }
+            }
+
             // For other binary attributes, just return Base64 encoding
             return Base64.getEncoder().encodeToString(binaryData);
 
@@ -588,6 +806,16 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
             getLogger().warn("Error formatting binary attribute: " + e.getMessage());
             return Base64.getEncoder().encodeToString(binaryData);
         }
+    }
+
+    /**
+     * Little-endian byte dizisinden int değeri çıkarır
+     */
+    private int bytesToInt(byte[] bytes, int offset) {
+        return ((bytes[offset + 3] & 0xFF) << 24) |
+                ((bytes[offset + 2] & 0xFF) << 16) |
+                ((bytes[offset + 1] & 0xFF) << 8) |
+                (bytes[offset] & 0xFF);
     }
 
     /**
@@ -649,10 +877,19 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
     /**
      * Perform LDAP add operation
      */
-    private boolean performAdd(LdapContext ctx, String entryDn, String jsonData, boolean debugMode) {
+    private boolean performAdd(LdapContext ctx, String entryDn, String jsonData, boolean debugMode, Control[] additionalControls) {
         try {
             if (debugMode) {
                 getLogger().info("Performing LDAP add operation for DN: {}", new Object[]{entryDn});
+            }
+
+            // Set additional controls if any
+            if (additionalControls != null && additionalControls.length > 0) {
+                ctx.setRequestControls(additionalControls);
+
+                if (debugMode) {
+                    getLogger().info("Set {} request controls for LDAP add", new Object[]{additionalControls.length});
+                }
             }
 
             // Parse the JSON data
@@ -705,10 +942,19 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
     /**
      * Perform LDAP modify operation
      */
-    private boolean performModify(LdapContext ctx, String entryDn, String jsonData, boolean debugMode) {
+    private boolean performModify(LdapContext ctx, String entryDn, String jsonData, boolean debugMode, Control[] additionalControls) {
         try {
             if (debugMode) {
                 getLogger().info("Performing LDAP modify operation for DN: {}", new Object[]{entryDn});
+            }
+
+            // Set additional controls if any
+            if (additionalControls != null && additionalControls.length > 0) {
+                ctx.setRequestControls(additionalControls);
+
+                if (debugMode) {
+                    getLogger().info("Set {} request controls for LDAP modify", new Object[]{additionalControls.length});
+                }
             }
 
             // Parse the JSON data
@@ -778,10 +1024,19 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
     /**
      * Perform LDAP delete operation
      */
-    private boolean performDelete(LdapContext ctx, String entryDn, boolean debugMode) {
+    private boolean performDelete(LdapContext ctx, String entryDn, boolean debugMode, Control[] additionalControls) {
         try {
             if (debugMode) {
                 getLogger().info("Performing LDAP delete operation for DN: {}", new Object[]{entryDn});
+            }
+
+            // Set additional controls if any
+            if (additionalControls != null && additionalControls.length > 0) {
+                ctx.setRequestControls(additionalControls);
+
+                if (debugMode) {
+                    getLogger().info("Set {} request controls for LDAP delete", new Object[]{additionalControls.length});
+                }
             }
 
             // Perform the delete operation
@@ -833,9 +1088,17 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
         final String referralHandling = context.getProperty(REFERRAL_HANDLING).evaluateAttributeExpressions(flowFile).getValue();
         final String outputFormat = context.getProperty(OUTPUT_FORMAT).evaluateAttributeExpressions(flowFile).getValue();
 
+        // LDAP kontrollerini yapılandır
+        final String ldapControlsConfig = context.getProperty(LDAP_CONTROLS).evaluateAttributeExpressions(flowFile).getValue();
+        final String controlValueFormat = context.getProperty(CONTROL_VALUE_FORMAT).evaluateAttributeExpressions(flowFile).getValue();
+        Control[] additionalControls = parseAndCreateLdapControls(ldapControlsConfig, controlValueFormat, debugMode);
+
         // Get binary attributes list
         final String binaryAttrsStr = context.getProperty(BINARY_ATTRIBUTES).evaluateAttributeExpressions(flowFile).getValue();
         Set<String> binaryAttributes = new HashSet<>();
+
+        // nTSecurityDescriptor her zaman ikili bir niteliktir, varsayılan olarak ekle
+        binaryAttributes.add("ntsecuritydescriptor");
 
         if (binaryAttrsStr != null && !binaryAttrsStr.trim().isEmpty()) {
             for (String attr : binaryAttrsStr.split(",")) {
@@ -868,8 +1131,9 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
                 case "SEARCH":
                     // Perform search operation
                     List<SearchResult> searchResults = performSearch(ldapContext, baseDn, searchFilter,
-                            searchScope, returnAttributes,
-                            pageSize, debugMode);
+                            searchScope, returnAttributes, pageSize,
+                            additionalControls, // Ek kontroller eklendi
+                            debugMode);
 
                     // Convert results to requested format
                     if ("JSON".equalsIgnoreCase(outputFormat)) {
@@ -892,7 +1156,7 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
                     });
 
                     String jsonData = new String(content, StandardCharsets.UTF_8);
-                    operationSuccess = performAdd(ldapContext, baseDn, jsonData, debugMode);
+                    operationSuccess = performAdd(ldapContext, baseDn, jsonData, debugMode, additionalControls);
 
                     if (operationSuccess) {
                         resultRef.set("{\"status\":\"success\",\"message\":\"Entry added successfully\"}");
@@ -912,7 +1176,7 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
                     });
 
                     String modifyJsonData = new String(modifyContent, StandardCharsets.UTF_8);
-                    operationSuccess = performModify(ldapContext, baseDn, modifyJsonData, debugMode);
+                    operationSuccess = performModify(ldapContext, baseDn, modifyJsonData, debugMode, additionalControls);
 
                     if (operationSuccess) {
                         resultRef.set("{\"status\":\"success\",\"message\":\"Entry modified successfully\"}");
@@ -922,7 +1186,7 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
                     break;
 
                 case "DELETE":
-                    operationSuccess = performDelete(ldapContext, baseDn, debugMode);
+                    operationSuccess = performDelete(ldapContext, baseDn, debugMode, additionalControls);
 
                     if (operationSuccess) {
                         resultRef.set("{\"status\":\"success\",\"message\":\"Entry deleted successfully\"}");
@@ -973,6 +1237,16 @@ public class InsecureLDAPProcessor extends AbstractProcessor {
                     attributes.put("ldap.baseDn", baseDn);
                 }
                 attributes.put("ldap.operation.success", String.valueOf(operationSuccess));
+
+                // Kontrol kullanımıyla ilgili bilgileri ekle
+                if (additionalControls != null && additionalControls.length > 0) {
+                    attributes.put("ldap.controls.count", String.valueOf(additionalControls.length));
+
+                    // İlk kontrolün OID'sini ekle (genellikle sadece bir tane kontrol kullanılır)
+                    if (additionalControls.length > 0) {
+                        attributes.put("ldap.controls.oid", additionalControls[0].getID());
+                    }
+                }
 
                 resultFlowFile = session.putAllAttributes(resultFlowFile, attributes);
 
