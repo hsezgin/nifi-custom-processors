@@ -1281,6 +1281,12 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
             int pageCount = 0;
             boolean hasMorePages = true;
 
+            // For tracking response status across pages
+            int finalStatusCode = 0;
+            String finalReasonPhrase = "";
+            Map<String, String> finalResponseHeaders = new HashMap<>();
+            long totalResponseTime = 0;
+
             // Make initial request and follow pagination links if enabled
             while (hasMorePages && (maxPages == 0 || pageCount < maxPages)) {
                 if (debugMode && pageCount > 0) {
@@ -1386,6 +1392,15 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                     statusCode = response.getStatusLine().getStatusCode();
                     reasonPhrase = response.getStatusLine().getReasonPhrase();
                     responseTime = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+
+                    // Save the status code of the first or last response (for pagination)
+                    if (pageCount == 0 || !hasMorePages) {
+                        finalStatusCode = statusCode;
+                        finalReasonPhrase = reasonPhrase;
+                    }
+
+                    // Accumulate response time
+                    totalResponseTime += responseTime;
 
                     getLogger().info("Received HTTP response: status={}, reason={}, time={}ms",
                             statusCode, reasonPhrase, responseTime);
@@ -1566,6 +1581,16 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
             attributes.put("http.url", url);
             attributes.put("http.method", method);
 
+            // Add the HTTP response status information
+            attributes.put("http.status.code", String.valueOf(finalStatusCode));
+            attributes.put("http.status.message", finalReasonPhrase);
+            attributes.put("http.response.time", String.valueOf(totalResponseTime));
+
+            // Add content-type if available
+            if (finalResponseHeaders.containsKey("content-type")) {
+                attributes.put("http.content.type", finalResponseHeaders.get("content-type"));
+            }
+
             // Add the pagination attributes if enabled
             if (enablePagination) {
                 attributes.put("http.pagination.enabled", "true");
@@ -1597,6 +1622,8 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
             }
         } catch (IOException e) {
             // Network error occurred, send to retry
+            flowFile = session.putAttribute(flowFile, "http.error.message", e.getMessage());
+            flowFile = session.putAttribute(flowFile, "http.status.code", "-1"); // Indicate network error with -1
             getLogger().error("Network error while sending HTTP request to {}: {}", url, e.getMessage());
             if (debugMode) {
                 getLogger().error("Network error details:", e);
@@ -1604,6 +1631,8 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
             session.transfer(flowFile, REL_RETRY);
         } catch (Exception e) {
             // Other errors, send to failure
+            flowFile = session.putAttribute(flowFile, "http.error.message", e.getMessage());
+            flowFile = session.putAttribute(flowFile, "http.status.code", "-2"); // Indicate general error with -2
             getLogger().error("Failed to send HTTP request to {}: {}", url, e.getMessage());
             if (debugMode) {
                 getLogger().error("Error details:", e);
