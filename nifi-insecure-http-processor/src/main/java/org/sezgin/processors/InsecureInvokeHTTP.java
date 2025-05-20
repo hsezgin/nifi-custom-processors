@@ -262,6 +262,86 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
             .build();
 
+    public static final PropertyDescriptor AUTH_TYPE = new PropertyDescriptor.Builder()
+            .name("Authentication Type")
+            .description("The type of authentication to use for HTTP requests")
+            .required(false)
+            .allowableValues(
+                    "None",
+                    "Basic Authentication",
+                    "Bearer Token",
+                    "API Key",
+                    "Custom"
+            )
+            .defaultValue("None")
+            .build();
+
+    // Basic Auth
+    public static final PropertyDescriptor BASIC_AUTH_USERNAME = new PropertyDescriptor.Builder()
+            .name("Basic Auth Username")
+            .description("Username for Basic Authentication. Used only when Authentication Type is 'Basic Authentication'.")
+            .required(false)
+            .sensitive(true)
+            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
+            .build();
+
+    public static final PropertyDescriptor BASIC_AUTH_PASSWORD = new PropertyDescriptor.Builder()
+            .name("Basic Auth Password")
+            .description("Password for Basic Authentication. Used only when Authentication Type is 'Basic Authentication'.")
+            .required(false)
+            .sensitive(true)
+            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
+            .build();
+
+    // Bearer Token
+    public static final PropertyDescriptor BEARER_TOKEN = new PropertyDescriptor.Builder()
+            .name("Bearer Token")
+            .description("Token for Bearer authentication. Used only when Authentication Type is 'Bearer Token'.")
+            .required(false)
+            .sensitive(true)
+            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
+            .build();
+
+    // API Key
+    public static final PropertyDescriptor API_KEY = new PropertyDescriptor.Builder()
+            .name("API Key")
+            .description("API Key value. Used only when Authentication Type is 'API Key'.")
+            .required(false)
+            .sensitive(true)
+            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
+            .build();
+
+    public static final PropertyDescriptor API_KEY_HEADER = new PropertyDescriptor.Builder()
+            .name("API Key Header Name")
+            .description("Header name for the API Key. Used only when Authentication Type is 'API Key'.")
+            .required(false)
+            .defaultValue("X-API-Key")
+            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
+            .build();
+
+    // CUSTOM AUTH
+    public static final PropertyDescriptor CUSTOM_AUTH_HEADER = new PropertyDescriptor.Builder()
+            .name("Custom Auth Header Name")
+            .description("Name of the custom authentication header. Used only when Authentication Type is 'Custom'.")
+            .required(false)
+            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
+            .build();
+
+    public static final PropertyDescriptor CUSTOM_AUTH_VALUE = new PropertyDescriptor.Builder()
+            .name("Custom Auth Header Value")
+            .description("Value for the custom authentication header. Used only when Authentication Type is 'Custom'.")
+            .required(false)
+            .sensitive(true)
+            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
+            .build();
+
     // Relationships
     public static final Relationship REL_SUCCESS = new Relationship.Builder()
             .name("success")
@@ -309,6 +389,15 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
         descriptors.add(SUCCESS_CODES);
         descriptors.add(EXTRACT_TOKEN_HEADER);
         descriptors.add(TOKEN_ATTRIBUTE_NAME);
+        // Kimlik doğrulama özellikleri
+        descriptors.add(AUTH_TYPE);  // Kimlik doğrulama türü seçeneği
+        descriptors.add(BASIC_AUTH_USERNAME);
+        descriptors.add(BASIC_AUTH_PASSWORD);
+        descriptors.add(BEARER_TOKEN);
+        descriptors.add(API_KEY);
+        descriptors.add(API_KEY_HEADER);
+        descriptors.add(CUSTOM_AUTH_HEADER);
+        descriptors.add(CUSTOM_AUTH_VALUE);
         this.descriptors = Collections.unmodifiableList(descriptors);
 
         final Set<Relationship> relationships = new HashSet<>();
@@ -341,6 +430,7 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                     .description("HTTP Header: Sets the '" + propertyDescriptorName.substring("http.header.".length()) +
                             "' HTTP header value for the request")
                     .required(false)
+                    .sensitive(true)
                     .dynamic(true)
                     .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES);
 
@@ -590,6 +680,111 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
             } else {
                 getLogger().info("No HTTP headers found in FlowFile attributes");
             }
+        }
+    }
+
+    /**
+     * HTTP isteğine kimlik doğrulama başlıklarını ekler
+     */
+    private void addAuthenticationHeaders(HttpRequestBase request, ProcessContext context, FlowFile flowFile, boolean debugMode) {
+        // Kimlik doğrulama türünü al
+        final String authType = context.getProperty(AUTH_TYPE).getValue();
+
+        // Kimlik doğrulama türüne göre işlem yap
+        switch (authType) {
+            case "Basic Authentication":
+                addBasicAuthentication(request, context, flowFile, debugMode);
+                break;
+            case "Bearer Token":
+                addBearerAuthentication(request, context, flowFile, debugMode);
+                break;
+            case "API Key":
+                addApiKeyAuthentication(request, context, flowFile, debugMode);
+                break;
+            case "Custom":
+                addCustomAuthentication(request, context, flowFile, debugMode);
+                break;
+            case "None":
+            default:
+                // Kimlik doğrulama yok, bir şey yapma
+                break;
+        }
+    }
+
+    /**
+     * Basic Authentication header'ı ekler
+     */
+    private void addBasicAuthentication(HttpRequestBase request, ProcessContext context, FlowFile flowFile, boolean debugMode) {
+        final String username = context.getProperty(BASIC_AUTH_USERNAME).evaluateAttributeExpressions(flowFile).getValue();
+        final String password = context.getProperty(BASIC_AUTH_PASSWORD).evaluateAttributeExpressions(flowFile).getValue();
+
+        if (username != null && !username.isEmpty() && password != null) {
+            String auth = username + ":" + password;
+            String encodedAuth = Base64.getEncoder().encodeToString(auth.getBytes(StandardCharsets.UTF_8));
+            request.addHeader("Authorization", "Basic " + encodedAuth);
+
+            if (debugMode) {
+                getLogger().info("Added Basic Authentication header for user: {}", new Object[]{username});
+            }
+        } else if (debugMode) {
+            getLogger().warn("Basic Authentication selected but username or password is missing");
+        }
+    }
+
+    /**
+     * Bearer Token header'ı ekler
+     */
+    private void addBearerAuthentication(HttpRequestBase request, ProcessContext context, FlowFile flowFile, boolean debugMode) {
+        final String token = context.getProperty(BEARER_TOKEN).evaluateAttributeExpressions(flowFile).getValue();
+
+        if (token != null && !token.isEmpty()) {
+            request.addHeader("Authorization", "Bearer " + token);
+
+            if (debugMode) {
+                getLogger().info("Added Bearer token authentication");
+            }
+        } else if (debugMode) {
+            getLogger().warn("Bearer Token Authentication selected but token is missing");
+        }
+    }
+
+    /**
+     * API Key header'ı ekler
+     */
+    private void addApiKeyAuthentication(HttpRequestBase request, ProcessContext context, FlowFile flowFile, boolean debugMode) {
+        final String apiKey = context.getProperty(API_KEY).evaluateAttributeExpressions(flowFile).getValue();
+
+        if (apiKey != null && !apiKey.isEmpty()) {
+            String headerName = context.getProperty(API_KEY_HEADER).evaluateAttributeExpressions(flowFile).getValue();
+            if (headerName == null || headerName.isEmpty()) {
+                headerName = "X-API-Key"; // varsayılan header adı
+            }
+
+            request.addHeader(headerName, apiKey);
+
+            if (debugMode) {
+                getLogger().info("Added API Key authentication with header: {}", new Object[]{headerName});
+            }
+        } else if (debugMode) {
+            getLogger().warn("API Key Authentication selected but API key is missing");
+        }
+    }
+
+    /**
+     * Özel kimlik doğrulama header'ı ekler
+     */
+    private void addCustomAuthentication(HttpRequestBase request, ProcessContext context, FlowFile flowFile, boolean debugMode) {
+        final String headerName = context.getProperty(CUSTOM_AUTH_HEADER).evaluateAttributeExpressions(flowFile).getValue();
+        final String headerValue = context.getProperty(CUSTOM_AUTH_VALUE).evaluateAttributeExpressions(flowFile).getValue();
+
+        if (headerName != null && !headerName.isEmpty() && headerValue != null && !headerValue.isEmpty()) {
+            request.addHeader(headerName, headerValue);
+
+            if (debugMode) {
+                getLogger().info("Added custom authentication header: {}", new Object[]{headerName});
+            }
+        } else if (debugMode) {
+            getLogger().warn("Custom Authentication selected but header name or value is missing");
         }
     }
 
@@ -1110,7 +1305,10 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                     return;
                 }
 
-                // First try to add headers from dynamic properties
+                // Add authentication headers first
+                addAuthenticationHeaders(request, context, flowFile, debugMode);
+
+                // Then add dynamic property headers
                 int dynamicHeadersAdded = processDynamicPropertiesAsHeaders(request, context, flowFile, debugMode);
 
                 // Then add headers from FlowFile attributes (if enabled and it's the first page)
@@ -1275,8 +1473,7 @@ public class InsecureInvokeHTTP extends AbstractProcessor {
                             // Use the next link for the next request
                             currentUrl = nextLink;
                             pageCount++;
-                        } else {
-                            // No more pages
+                        } else {// No more pages
                             hasMorePages = false;
                         }
                     } else {
